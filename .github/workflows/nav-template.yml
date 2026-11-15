@@ -1,0 +1,82 @@
+name: NAV template
+
+# Every week (or by hand): takes NAV's newest invoice data template (scripts/update-template.sh);
+# where it has changed, builds the image with it, draws NAV's sample invoices in every language
+# (scripts/smoke-test.sh), and opens (or updates) a pull request with the new template. Nothing is
+# released by itself: the pull request is reviewed, merged and released by hand.
+#
+# Needs "Allow GitHub Actions to create and approve pull requests" in the repository's
+# Settings › Actions › General.
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: nav-template
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    name: Take NAV's newest template
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Take the newest template
+        id: update
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          previous=$(sed -n 's/^commit=//p' template/UPSTREAM)
+          commit=$(scripts/update-template.sh)
+          echo "previous=${previous}" >> "$GITHUB_OUTPUT"
+          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
+          if git diff --quiet -- template/; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "NAV's template is unchanged (${commit})."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --stat -- template/
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.update.outputs.changed == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the image with it
+        if: steps.update.outputs.changed == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: nav-osa-xml2pdf:nav-template
+          cache-from: type=gha,scope=image
+
+      - name: Draw NAV's sample invoices
+        if: steps.update.outputs.changed == 'true'
+        run: scripts/smoke-test.sh nav-osa-xml2pdf:nav-template
+
+      - name: Open a pull request
+        if: steps.update.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: nav-template
+          delete-branch: true
+          add-paths: template/
+          commit-message: "chore: NAV template ${{ steps.update.outputs.commit }}"
+          title: "chore: NAV template ${{ steps.update.outputs.commit }}"
+          body: |
+            NAV's invoice data template has changed:
+            https://github.com/nav-gov-hu/Online-Invoice-XSLT/compare/${{ steps.update.outputs.previous }}...${{ steps.update.outputs.commit }}
+
+            Built and checked here: NAV's sample invoices (downloaded from NAV) are drawn into PDFs in HU, EN and DE.
+            Look at a real invoice's PDF before releasing.

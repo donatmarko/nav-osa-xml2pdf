@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Apache FOP's configuration for NAV's invoice data template (InvoiceDataTemplate_XSLT_FO.xslt).
+  The template sets Tahoma, which is not free to ship: DejaVu Sans (Alpine's font-dejavu) is
+  registered under its name, as NAV's README registers tahoma.ttf, and under FOP's own base font
+  names, which have no ő or ű, for what the template leaves to them.
+-->
+<fop version="1.0">
+  <strict-configuration>false</strict-configuration>
+  <renderers>
+    <renderer mime="application/pdf">
+      <fonts>
+        <font embed-url="file:///usr/share/fonts/dejavu/DejaVuSans.ttf" kerning="yes">
+          <font-triplet name="Tahoma" style="normal" weight="normal"/>
+          <font-triplet name="DejaVu Sans" style="normal" weight="normal"/>
+          <font-triplet name="sans-serif" style="normal" weight="normal"/>
+          <font-triplet name="serif" style="normal" weight="normal"/>
+          <font-triplet name="Helvetica" style="normal" weight="normal"/>
+          <font-triplet name="Arial" style="normal" weight="normal"/>
+          <font-triplet name="Times" style="normal" weight="normal"/>
+          <font-triplet name="Times-Roman" style="normal" weight="normal"/>
+          <font-triplet name="Times New Roman" style="normal" weight="normal"/>
+          <font-triplet name="any" style="normal" weight="normal"/>
+        </font>
+        <font embed-url="file:///usr/share/fonts/dejavu/DejaVuSans-Bold.ttf" kerning="yes">
+          <font-triplet name="Tahoma" style="normal" weight="bold"/>
+          <font-triplet name="DejaVu Sans" style="normal" weight="bold"/>
+          <font-triplet name="sans-serif" style="normal" weight="bold"/>
+          <font-triplet name="serif" style="normal" weight="bold"/>
+          <font-triplet name="Helvetica" style="normal" weight="bold"/>
+          <font-triplet name="Arial" style="normal" weight="bold"/>
+          <font-triplet name="Times" style="normal" weight="bold"/>
+          <font-triplet name="Times-Roman" style="normal" weight="bold"/>
+          <font-triplet name="Times New Roman" style="normal" weight="bold"/>
+          <font-triplet name="any" style="normal" weight="bold"/>
+        </font>
+        <font embed-url="file:///usr/share/fonts/dejavu/DejaVuSans-Oblique.ttf" kerning="yes">
+          <font-triplet name="Tahoma" style="italic" weight="normal"/>
+          <font-triplet name="DejaVu Sans" style="italic" weight="normal"/>
+          <font-triplet name="sans-serif" style="italic" weight="normal"/>
+          <font-triplet name="serif" style="italic" weight="normal"/>
+          <font-triplet name="Helvetica" style="italic" weight="normal"/>
+          <font-triplet name="Arial" style="italic" weight="normal"/>
+          <font-triplet name="Times" style="italic" weight="normal"/>
+          <font-triplet name="Times-Roman" style="italic" weight="normal"/>
+          <font-triplet name="Times New Roman" style="italic" weight="normal"/>
+          <font-triplet name="any" style="italic" weight="normal"/>
+        </font>
+        <font embed-url="file:///usr/share/fonts/dejavu/DejaVuSans-BoldOblique.ttf" kerning="yes">
+          <font-triplet name="Tahoma" style="italic" weight="bold"/>
+          <font-triplet name="DejaVu Sans" style="italic" weight="bold"/>
+          <font-triplet name="sans-serif" style="italic" weight="bold"/>
+          <font-triplet name="serif" style="italic" weight="bold"/>
+          <font-triplet name="Helvetica" style="italic" weight="bold"/>
+          <font-triplet name="Arial" style="italic" weight="bold"/>
+          <font-triplet name="Times" style="italic" weight="bold"/>
+          <font-triplet name="Times-Roman" style="italic" weight="bold"/>
+          <font-triplet name="Times New Roman" style="italic" weight="bold"/>
+          <font-triplet name="any" style="italic" weight="bold"/>
+        </font>
+      </fonts>
+    </renderer>
+  </renderers>
+</fop>

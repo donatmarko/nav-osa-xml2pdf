@@ -1,0 +1,5 @@
+# NAV's template this repository carries, as scripts/update-template.sh last took it.
+repository=nav-gov-hu/Online-Invoice-XSLT
+path=template/3.0/InvoiceDataTemplate_XSLT_FO.xslt
+commit=eb81e90f5b5bebf781b61ef2ae0c6e51c52c3e9d
+date=2024-02-28T14:17:35Z

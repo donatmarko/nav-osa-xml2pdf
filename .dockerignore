@@ -1,0 +1,5 @@
+.git
+.github
+*.md
+!template/LICENCE.md
+!THIRD-PARTY-NOTICES.md
