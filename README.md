@@ -23,6 +23,9 @@ An XML with a DOCTYPE is refused (HTTP 422): NAV's InvoiceData never has one, an
 a file or reach a URL into the PDF. An XML the template cannot draw also answers 422; one larger than
 32 MB answers 413.
 
+Every answer carries `Server: nav-osa-xml2pdf/<version>`, the image's version (`dev` where built by
+hand).
+
 ## Running
 
 ```bash

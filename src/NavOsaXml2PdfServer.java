@@ -44,6 +44,9 @@ public final class NavOsaXml2PdfServer {
 
     private static final SAXParserFactory PARSERS = parserFactory();
 
+    /** Every answer names the service and its version (the image's, set at build time). */
+    private static final String SERVER = "nav-osa-xml2pdf/" + env("NAV_OSA_XML2PDF_VERSION", "dev");
+
     private NavOsaXml2PdfServer() {}
 
     public static void main(String[] args) throws Exception {
@@ -57,7 +60,7 @@ public final class NavOsaXml2PdfServer {
         server.createContext("/render", exchange -> render(exchange, template, fopFactory));
         server.setExecutor(Executors.newFixedThreadPool(Integer.parseInt(env("THREADS", "2"))));
         server.start();
-        System.out.println("NAV OSA XML2PDF listening on " + server.getAddress());
+        System.out.println(SERVER + " listening on " + server.getAddress());
     }
 
     private static void render(HttpExchange exchange, XsltExecutable template, FopFactory fopFactory) throws IOException {
@@ -154,6 +157,7 @@ public final class NavOsaXml2PdfServer {
     }
 
     private static void respond(HttpExchange exchange, int status, String contentType, byte[] body) throws IOException {
+        exchange.getResponseHeaders().set("Server", SERVER);
         exchange.getResponseHeaders().set("Content-Type", contentType);
         exchange.sendResponseHeaders(status, body.length);
 

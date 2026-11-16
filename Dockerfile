@@ -57,6 +57,10 @@ COPY template/LICENCE.md ./licenses/NAV-template-LICENCE.md
 
 USER app
 
+# The version the Server header names (the release's, given by the workflow); dev where built by hand.
+ARG VERSION=dev
+ENV NAV_OSA_XML2PDF_VERSION=${VERSION}
+
 # Port 80 as the unprivileged app user: Docker (20.10+) lets a container's processes bind ports
 # below 1024 (net.ipv4.ip_unprivileged_port_start=0). Elsewhere, set PORT to one above 1023.
 ENV PORT=80
