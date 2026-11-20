@@ -6,7 +6,10 @@ name: NAV template
 # released by itself: the pull request is reviewed, merged and released by hand.
 #
 # Needs "Allow GitHub Actions to create and approve pull requests" in the repository's
-# Settings › Actions › General.
+# Settings › Actions › General. A pull request opened with GITHUB_TOKEN runs no other workflow
+# (the Docker workflow's checks among them): where the NAV_TEMPLATE_TOKEN secret is set (a
+# fine-grained token with Contents and Pull requests: read and write on this repository), the pull
+# request is opened with it instead, and its checks run.
 on:
   schedule:
     - cron: "17 5 * * 1"
@@ -28,7 +31,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Take the newest template
         id: update
@@ -49,11 +52,11 @@ jobs:
 
       - name: Set up Docker Buildx
         if: steps.update.outputs.changed == 'true'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Build the image with it
         if: steps.update.outputs.changed == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           load: true
@@ -67,8 +70,9 @@ jobs:
 
       - name: Open a pull request
         if: steps.update.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
         with:
+          token: ${{ secrets.NAV_TEMPLATE_TOKEN || secrets.GITHUB_TOKEN }}
           branch: nav-template
           delete-branch: true
           add-paths: template/

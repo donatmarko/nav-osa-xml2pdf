@@ -5,7 +5,7 @@
 # (src/NavOsaXml2PdfServer.java), on the internal network only. Built from the repository root:
 #   docker build .
 
-FROM eclipse-temurin:21-jdk-alpine AS build
+FROM eclipse-temurin:21-jdk-alpine@sha256:c07bb82e004a166b5d3d63b84ad70e2e822f228505e2e0c0b8dfdc2890d22f13 AS build
 
 ARG SAXON_VERSION=12.10
 ARG SAXON_SHA256=b571af282f25d7301059f788b9a149aab8b5cdc14ef3d212dc5425d3dcbb9a97
@@ -14,17 +14,21 @@ ARG XMLRESOLVER_SHA256=1fe4d5b92f708dcdb82dbce12919e0171e6b5ca62c6dca62204836250
 ARG XMLRESOLVER_DATA_SHA256=b0c487ad2f3e558be8d829c916d2458d10aca6a5bafa7a4d0524b70845e48a5c
 ARG FOP_VERSION=2.12
 ARG FOP_SHA256=f43bf5227557c2653105f4494bb2c3c4e7715cef21997286a16e9847399b81a4
+ARG SENTRY_VERSION=8.65.0
+ARG SENTRY_SHA256=c8dd312452a96cfce0d50319d11b4601d6747de3d2554c938b89df9e71c25b14
 
 WORKDIR /opt/nav-osa-xml2pdf
 
 # Pinned and checked: Saxon HE 12 (NAV's README runs 11; the output is the same), with the resolver
-# version its POM names; FOP's jars.
+# version its POM names; FOP's jars; the Sentry SDK (no dependencies of its own) for GlitchTip.
 RUN apk add --no-cache curl \
-    && mkdir -p saxon fop classes /tmp/fop \
+    && mkdir -p saxon fop sentry classes /tmp/fop \
     && curl -fsSL -o saxon/saxon-he.jar "https://repo1.maven.org/maven2/net/sf/saxon/Saxon-HE/${SAXON_VERSION}/Saxon-HE-${SAXON_VERSION}.jar" \
     && curl -fsSL -o saxon/xmlresolver.jar "https://repo1.maven.org/maven2/org/xmlresolver/xmlresolver/${XMLRESOLVER_VERSION}/xmlresolver-${XMLRESOLVER_VERSION}.jar" \
     && curl -fsSL -o saxon/xmlresolver-data.jar "https://repo1.maven.org/maven2/org/xmlresolver/xmlresolver/${XMLRESOLVER_VERSION}/xmlresolver-${XMLRESOLVER_VERSION}-data.jar" \
     && printf '%s  %s\n' "${SAXON_SHA256}" saxon/saxon-he.jar "${XMLRESOLVER_SHA256}" saxon/xmlresolver.jar "${XMLRESOLVER_DATA_SHA256}" saxon/xmlresolver-data.jar | sha256sum -c - \
+    && curl -fsSL -o sentry/sentry.jar "https://repo1.maven.org/maven2/io/sentry/sentry/${SENTRY_VERSION}/sentry-${SENTRY_VERSION}.jar" \
+    && echo "${SENTRY_SHA256}  sentry/sentry.jar" | sha256sum -c - \
     && curl -fsSL -o /tmp/fop.tar.gz "https://archive.apache.org/dist/xmlgraphics/fop/binaries/fop-${FOP_VERSION}-bin.tar.gz" \
     && echo "${FOP_SHA256}  /tmp/fop.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/fop.tar.gz -C /tmp/fop \
@@ -36,9 +40,9 @@ RUN apk add --no-cache curl \
     && rm -rf /tmp/fop /tmp/fop.tar.gz
 
 COPY src/NavOsaXml2PdfServer.java /tmp/src/
-RUN javac --release 21 -cp "saxon/*:fop/*" -d classes /tmp/src/NavOsaXml2PdfServer.java
+RUN javac --release 21 -cp "saxon/*:fop/*:sentry/*" -d classes /tmp/src/NavOsaXml2PdfServer.java
 
-FROM eclipse-temurin:21-jre-alpine
+FROM eclipse-temurin:21-jre-alpine@sha256:5d7689f47d670aca766b9503a70bccc2d73b4eb9221ae8f714ae958313c4ce70
 
 # DejaVu Sans for the template's Tahoma (template/fop.xconf).
 RUN apk add --no-cache font-dejavu fontconfig \
@@ -48,6 +52,7 @@ WORKDIR /opt/nav-osa-xml2pdf
 
 COPY --from=build /opt/nav-osa-xml2pdf/saxon ./saxon
 COPY --from=build /opt/nav-osa-xml2pdf/fop ./fop
+COPY --from=build /opt/nav-osa-xml2pdf/sentry ./sentry
 COPY --from=build /opt/nav-osa-xml2pdf/classes ./classes
 COPY --from=build /opt/nav-osa-xml2pdf/licenses/fop ./licenses/fop
 COPY template/InvoiceDataTemplate_XSLT_FO.xslt template/fop.xconf ./
@@ -66,10 +71,16 @@ ENV NAV_OSA_XML2PDF_VERSION=${VERSION}
 ENV PORT=80
 EXPOSE 80
 
+# Out of memory, the JVM exits rather than serving on half-broken (-XX:+ExitOnOutOfMemoryError):
+# run the container with a restart policy (docker run --restart unless-stopped).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD wget -q -O /dev/null "http://127.0.0.1:${PORT}/health" || exit 1
 
-CMD ["java", "-Djava.awt.headless=true", "-Xmx512m", "-Xss8m", "-cp", "/opt/nav-osa-xml2pdf/classes:/opt/nav-osa-xml2pdf/saxon/*:/opt/nav-osa-xml2pdf/fop/*", "NavOsaXml2PdfServer"]
+# Out of memory, the JVM first runs a small one (a heap of 32 MB) that reports it where SENTRY_DSN
+# is set, then exits; a restart policy brings it back.
+CMD ["java", "-Djava.awt.headless=true", "-Xmx512m", "-XX:+ExitOnOutOfMemoryError", \
+    "-XX:OnOutOfMemoryError=java -Xmx32m -cp '/opt/nav-osa-xml2pdf/classes:/opt/nav-osa-xml2pdf/saxon/*:/opt/nav-osa-xml2pdf/fop/*:/opt/nav-osa-xml2pdf/sentry/*' NavOsaXml2PdfServer --report-oom", \
+    "-Xss8m", "-cp", "/opt/nav-osa-xml2pdf/classes:/opt/nav-osa-xml2pdf/saxon/*:/opt/nav-osa-xml2pdf/fop/*:/opt/nav-osa-xml2pdf/sentry/*", "NavOsaXml2PdfServer"]
 
 LABEL maintainer="MARKO Donat <donat.marko@donatus.hu>"
 LABEL description="PDFs of NAV Online Számla invoice data (InvoiceData XML) by NAV's own template (Saxon HE, Apache FOP)"

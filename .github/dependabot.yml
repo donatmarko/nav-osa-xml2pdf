@@ -1,0 +1,21 @@
+# The base images (pinned by digest in the Dockerfile) and the workflows' actions (pinned by
+# commit): a pull request a week where a newer one is out. Saxon HE and FOP are pinned by
+# checksum in the Dockerfile's ARGs, updated by hand.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+    groups:
+      actions:
+        patterns:
+          - "*"

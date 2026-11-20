@@ -50,12 +50,43 @@ trap 'rm -f "$out" "$doctype"; docker stop "$name" >/dev/null 2>&1 || true' EXIT
 } >"$doctype"
 status=$(curl -sS -m 120 -o "$out" -w '%{http_code}' -X POST -H 'Content-Type: application/xml' \
     --data-binary @"$doctype" "http://127.0.0.1:${port}/render?lang=HU" || true)
-if [[ "$status" == 422 ]]; then
+# Refused for its DOCTYPE, not for any other reason the template could not draw it.
+if [[ "$status" == 422 ]] && grep -q 'DOCTYPE is disallowed' "$out"; then
     echo "DOCTYPE refused (HTTP 422)."
 else
     failed=$((failed + 1))
-    echo "An XML with a DOCTYPE was not refused (HTTP ${status})." >&2
+    echo "An XML with a DOCTYPE was not refused for it (HTTP ${status}): $(head -c 300 "$out")" >&2
 fi
+
+# An XML that is not an InvoiceData of interface 3.0 (here another root, and the InvoiceData of
+# interface 2.0) is refused, not drawn as an empty invoice.
+for xml in '<x/>' '<InvoiceData xmlns="http://schemas.nav.gov.hu/OSA/2.0/data"/>'; do
+    status=$(curl -sS -m 30 -o "$out" -w '%{http_code}' -X POST -H 'Content-Type: application/xml' \
+        --data-binary "$xml" "http://127.0.0.1:${port}/render?lang=HU" || true)
+    if [[ "$status" == 422 ]] && grep -q 'Not an InvoiceData of interface 3.0' "$out"; then
+        echo "Not an InvoiceData, refused (HTTP 422): ${xml}"
+    else
+        failed=$((failed + 1))
+        echo "${xml} was not refused as not an InvoiceData (HTTP ${status}): $(head -c 300 "$out")" >&2
+    fi
+done
+
+# What answers other than a PDF: method, path, body (curl's own options) and the status expected.
+check() {
+    local expected=$1 path=$2
+    shift 2
+    status=$(curl -sS -m 30 -o /dev/null -w '%{http_code}' "$@" "http://127.0.0.1:${port}${path}" || true)
+    if [[ "$status" != "$expected" ]]; then
+        failed=$((failed + 1))
+        echo "${path} ($*) answered HTTP ${status}, not ${expected}." >&2
+    fi
+}
+check 200 /health --head
+check 404 /healthz
+check 404 /render/x -X POST --data-binary @tests/nav-samples/belfoldi-termekertekesites.xml
+check 405 /render
+check 400 /render -X POST -H 'Content-Type: application/xml' --data-binary ''
+check 400 '/render?lang=hu' -X POST --data-binary @tests/nav-samples/belfoldi-termekertekesites.xml
 
 echo "${drawn} PDFs drawn, ${failed} failed."
 [[ "$failed" == 0 ]]

@@ -1,5 +1,7 @@
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import io.sentry.Sentry;
+import io.sentry.SentryLevel;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -8,6 +10,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executors;
@@ -26,38 +29,77 @@ import net.sf.saxon.s9api.XsltExecutable;
 import org.apache.fop.apps.Fop;
 import org.apache.fop.apps.FopFactory;
 import org.apache.fop.apps.MimeConstants;
+import org.xml.sax.Attributes;
 import org.xml.sax.InputSource;
 import org.xml.sax.SAXException;
 import org.xml.sax.XMLReader;
+import org.xml.sax.helpers.XMLFilterImpl;
 
 /**
  * NAV's invoice data template (InvoiceDataTemplate_XSLT_FO.xslt, XSLT 2.0) run by Saxon HE, its
  * XSL-FO drawn into a PDF by Apache FOP, as NAV's README runs them, in one JVM that compiles the
  * template once: POST /render?lang=HU with an InvoiceData XML (interface 3.0) answers its PDF;
  * GET /health answers ok. Only on the internal network. An XML with a DOCTYPE is refused (NAV's
- * InvoiceData never has one), so that no entity reads a file or reaches a URL into the PDF.
+ * InvoiceData never has one), so that no entity reads a file or reaches a URL into the PDF; so is
+ * one whose root is not an InvoiceData of interface 3.0.
  */
 public final class NavOsaXml2PdfServer {
     private static final Set<String> LANGUAGES = Set.of("HU", "EN", "DE");
 
     private static final int MAX_BODY_BYTES = 32 * 1024 * 1024;
 
+    /** InvoiceData's namespace in interface 3.0, the one NAV's template draws. */
+    private static final String INVOICE_DATA_NAMESPACE = "http://schemas.nav.gov.hu/OSA/3.0/data";
+
     private static final SAXParserFactory PARSERS = parserFactory();
 
+    private static final String VERSION = env("NAV_OSA_XML2PDF_VERSION", "dev");
+
     /** Every answer names the service and its version (the image's, set at build time). */
-    private static final String SERVER = "nav-osa-xml2pdf/" + env("NAV_OSA_XML2PDF_VERSION", "dev");
+    private static final String SERVER = "nav-osa-xml2pdf/" + VERSION;
 
     private NavOsaXml2PdfServer() {}
 
     public static void main(String[] args) throws Exception {
+        String dsn = env("SENTRY_DSN", "");
+
+        // Errors go to GlitchTip (or Sentry) only where a DSN is given, and never the invoice data
+        // itself: the request's XML is not sent, nor anything of who sent it.
+        if (!dsn.isEmpty()) {
+            Sentry.init(options -> {
+                options.setDsn(dsn);
+                options.setRelease("nav-osa-xml2pdf@" + VERSION);
+                options.setEnvironment(env("SENTRY_ENVIRONMENT", "production"));
+                options.setSendDefaultPii(false);
+            });
+        }
+
+        // Run by the server's JVM as it runs out of memory (-XX:OnOutOfMemoryError, Dockerfile), just
+        // before it exits: that JVM can report nothing more, so this one says it, and is gone.
+        if (args.length > 0 && args[0].equals("--report-oom")) {
+            Sentry.captureMessage("Out of memory: the server exits, to be restarted.", SentryLevel.FATAL);
+            Sentry.close();
+            return;
+        }
+
         File home = new File(env("NAV_OSA_XML2PDF_HOME", "/opt/nav-osa-xml2pdf"));
         Processor processor = new Processor(false);
         XsltExecutable template = processor.newXsltCompiler().compile(new StreamSource(new File(home, "InvoiceDataTemplate_XSLT_FO.xslt")));
         FopFactory fopFactory = FopFactory.newInstance(new File(home, "fop.xconf"));
 
         HttpServer server = HttpServer.create(new InetSocketAddress(Integer.parseInt(env("PORT", "80"))), 0);
-        server.createContext("/health", exchange -> respond(exchange, 200, "text/plain", "ok"));
-        server.createContext("/render", exchange -> render(exchange, template, fopFactory));
+        // One context for every path (a context matches by prefix), so that only these two answer.
+        server.createContext("/", exchange -> {
+            try {
+                switch (exchange.getRequestURI().getPath()) {
+                    case "/health" -> respond(exchange, 200, "text/plain", "ok");
+                    case "/render" -> render(exchange, template, fopFactory);
+                    default -> respond(exchange, 404, "text/plain", "Not found: POST /render or GET /health.");
+                }
+            } finally {
+                exchange.close();
+            }
+        });
         server.setExecutor(Executors.newFixedThreadPool(Integer.parseInt(env("THREADS", "2"))));
         server.start();
         System.out.println(SERVER + " listening on " + server.getAddress());
@@ -66,6 +108,7 @@ public final class NavOsaXml2PdfServer {
     private static void render(HttpExchange exchange, XsltExecutable template, FopFactory fopFactory) throws IOException {
         try {
             if (!"POST".equals(exchange.getRequestMethod())) {
+                exchange.getResponseHeaders().set("Allow", "POST");
                 respond(exchange, 405, "text/plain", "POST an InvoiceData XML.");
                 return;
             }
@@ -79,8 +122,13 @@ public final class NavOsaXml2PdfServer {
 
             byte[] xml = exchange.getRequestBody().readNBytes(MAX_BODY_BYTES + 1);
 
-            if (xml.length == 0 || xml.length > MAX_BODY_BYTES) {
-                respond(exchange, 413, "text/plain", "The XML is empty or larger than 32 MB.");
+            if (xml.length == 0) {
+                respond(exchange, 400, "text/plain", "POST an InvoiceData XML: the request is empty.");
+                return;
+            }
+
+            if (xml.length > MAX_BODY_BYTES) {
+                respond(exchange, 413, "text/plain", "The XML is larger than 32 MB.");
                 return;
             }
 
@@ -92,30 +140,79 @@ public final class NavOsaXml2PdfServer {
                 transformer.setStylesheetParameters(Map.of(new QName("lang"), new XdmAtomicValue(lang)));
                 transformer.transform(invoiceData(xml), new SAXDestination(fop.getDefaultHandler()));
             } catch (SaxonApiException | SAXException exception) { // FOPException is a SAXException
+                // The XML, or what the template made of it (FOP's validation too), not this server.
+                System.err.println("422 lang=" + lang + " (" + xml.length + " bytes): " + exception.getMessage());
+                report422(exception, lang, xml.length);
                 respond(exchange, 422, "text/plain", "Could not draw the invoice: " + exception.getMessage());
                 return;
             }
 
             respond(exchange, 200, "application/pdf", pdf.toByteArray());
         } catch (RuntimeException exception) {
+            System.err.println("500:");
             exception.printStackTrace();
+            Sentry.captureException(exception);
             respond(exchange, 500, "text/plain", "Could not draw the invoice: " + exception);
-        } finally {
-            exchange.close();
         }
+    }
+
+    /**
+     * A 422 is the ERP sending invoice data that cannot be drawn: a warning, one issue for each kind
+     * of fault. The kind is the message without what varies by invoice (quoted values, namespaces,
+     * numbers and positions), so that the same fault in many invoices is one issue, not many.
+     */
+    private static void report422(Exception exception, String lang, int bytes) {
+        String message = String.valueOf(exception.getMessage());
+        String kind = message.replaceAll("\"[^\"]*\"|'[^']*'|\\{[^}]*}|\\b\\d+(?:[.:]\\d+)*\\b", "…").replaceAll("\\s+", " ");
+
+        Sentry.captureMessage("422: " + kind, SentryLevel.WARNING, scope -> {
+            scope.setFingerprint(List.of("422", kind));
+            scope.setTag("lang", lang);
+            scope.setExtra("message", message);
+            scope.setExtra("bytes", Integer.toString(bytes));
+        });
     }
 
     /** The request's XML, read by a parser that refuses any DOCTYPE, and so any entity. */
     private static SAXSource invoiceData(byte[] xml) throws SAXException {
         XMLReader reader;
 
+        // A SAXParserFactory is not promised to be thread-safe; a parser is cheap to make.
         try {
-            reader = PARSERS.newSAXParser().getXMLReader();
+            synchronized (PARSERS) {
+                reader = PARSERS.newSAXParser().getXMLReader();
+            }
         } catch (ParserConfigurationException exception) {
             throw new IllegalStateException(exception);
         }
 
-        return new SAXSource(reader, new InputSource(new ByteArrayInputStream(xml)));
+        return new SAXSource(new InvoiceDataOnly(reader), new InputSource(new ByteArrayInputStream(xml)));
+    }
+
+    /**
+     * Lets through only an XML whose root is an InvoiceData of interface 3.0: the template draws an
+     * empty invoice of anything else, which would answer a PDF for an XML that is not one.
+     */
+    private static final class InvoiceDataOnly extends XMLFilterImpl {
+        private boolean root = true;
+
+        InvoiceDataOnly(XMLReader parent) {
+            super(parent);
+        }
+
+        @Override
+        public void startElement(String uri, String localName, String qName, Attributes attributes) throws SAXException {
+            if (root) {
+                root = false;
+
+                if (!INVOICE_DATA_NAMESPACE.equals(uri) || !"InvoiceData".equals(localName)) {
+                    throw new SAXException("Not an InvoiceData of interface 3.0: the root element is {" + uri + "}" + localName
+                            + ", not {" + INVOICE_DATA_NAMESPACE + "}InvoiceData.");
+                }
+            }
+
+            super.startElement(uri, localName, qName, attributes);
+        }
     }
 
     private static SAXParserFactory parserFactory() {
@@ -159,6 +256,13 @@ public final class NavOsaXml2PdfServer {
     private static void respond(HttpExchange exchange, int status, String contentType, byte[] body) throws IOException {
         exchange.getResponseHeaders().set("Server", SERVER);
         exchange.getResponseHeaders().set("Content-Type", contentType);
+
+        // A HEAD answer has no body: the JDK's server refuses one written to it.
+        if ("HEAD".equals(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(status, -1);
+            return;
+        }
+
         exchange.sendResponseHeaders(status, body.length);
 
         try (OutputStream out = exchange.getResponseBody()) {
