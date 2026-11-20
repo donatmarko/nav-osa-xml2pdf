@@ -50,6 +50,7 @@ curl -fsS -X POST -H 'Content-Type: application/xml' --data-binary @tests/nav-sa
 | `NAV_OSA_XML2PDF_HOME` | `/opt/nav-osa-xml2pdf` | Where the template and `fop.xconf` are. |
 | `SENTRY_DSN`           | (none)                | GlitchTip's (or Sentry's) DSN; without it, nothing is reported. |
 | `SENTRY_ENVIRONMENT`   | `production`          | The environment the reports name.        |
+| `SENTRY_TRACES_SAMPLE_RATE` | `0`             | Share of `/render` requests timed (`0` to `1`); `0`, none. |
 
 In a Docker Compose stack, next to the service that calls it (by its name, here
 `http://nav-osa-xml2pdf/render`), with no port published:
@@ -76,6 +77,13 @@ The request's XML is never sent, nor who sent it (no IP address). The message of
 value of the invoice data, as the 422's answer does. The release is `nav-osa-xml2pdf@<version>`.
 Out of memory, the server's JVM can report nothing: just before it exits, it runs a second, small
 one (a heap of 32 MB, so the container needs that much to spare) that reports it as fatal.
+
+### Timings
+
+With `SENTRY_TRACES_SAMPLE_RATE` above `0`, that share of `/render` requests is sent as a transaction
+(`POST /render`, tagged with its language and HTTP status) in two spans: reading the XML, and
+drawing it. Saxon streams the XSL-FO into FOP as it goes, so the XSLT and the PDF are one span, not
+two. A 422 or a 500 of a timed request is linked to its transaction.
 
 ## Layout
 

@@ -1,7 +1,11 @@
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import io.sentry.ISpan;
+import io.sentry.ITransaction;
 import io.sentry.Sentry;
 import io.sentry.SentryLevel;
+import io.sentry.SpanStatus;
+import io.sentry.TransactionOptions;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -71,6 +75,12 @@ public final class NavOsaXml2PdfServer {
                 options.setRelease("nav-osa-xml2pdf@" + VERSION);
                 options.setEnvironment(env("SENTRY_ENVIRONMENT", "production"));
                 options.setSendDefaultPii(false);
+
+                double tracesSampleRate = Double.parseDouble(env("SENTRY_TRACES_SAMPLE_RATE", "0"));
+
+                if (tracesSampleRate > 0) {
+                    options.setTracesSampleRate(tracesSampleRate);
+                }
             });
         }
 
@@ -93,7 +103,19 @@ public final class NavOsaXml2PdfServer {
             try {
                 switch (exchange.getRequestURI().getPath()) {
                     case "/health" -> respond(exchange, 200, "text/plain", "ok");
-                    case "/render" -> render(exchange, template, fopFactory);
+                    case "/render" -> {
+                        TransactionOptions transactionOptions = new TransactionOptions();
+                        transactionOptions.setBindToScope(true);
+                        ITransaction transaction = Sentry.startTransaction(exchange.getRequestMethod() + " /render", "http.server", transactionOptions);
+
+                        try {
+                            render(exchange, template, fopFactory, transaction);
+                        } finally {
+                            int status = exchange.getResponseCode();
+                            transaction.setTag("http.status_code", Integer.toString(status));
+                            transaction.finish(spanStatus(status));
+                        }
+                    }
                     default -> respond(exchange, 404, "text/plain", "Not found: POST /render or GET /health.");
                 }
             } finally {
@@ -105,7 +127,7 @@ public final class NavOsaXml2PdfServer {
         System.out.println(SERVER + " listening on " + server.getAddress());
     }
 
-    private static void render(HttpExchange exchange, XsltExecutable template, FopFactory fopFactory) throws IOException {
+    private static void render(HttpExchange exchange, XsltExecutable template, FopFactory fopFactory, ITransaction transaction) throws IOException {
         try {
             if (!"POST".equals(exchange.getRequestMethod())) {
                 exchange.getResponseHeaders().set("Allow", "POST");
@@ -120,7 +142,17 @@ public final class NavOsaXml2PdfServer {
                 return;
             }
 
-            byte[] xml = exchange.getRequestBody().readNBytes(MAX_BODY_BYTES + 1);
+            transaction.setTag("lang", lang);
+
+            ISpan read = transaction.startChild("http.server.read", "Read the InvoiceData XML");
+            byte[] xml;
+
+            try {
+                xml = exchange.getRequestBody().readNBytes(MAX_BODY_BYTES + 1);
+                read.setData("bytes", xml.length);
+            } finally {
+                read.finish();
+            }
 
             if (xml.length == 0) {
                 respond(exchange, 400, "text/plain", "POST an InvoiceData XML: the request is empty.");
@@ -133,18 +165,26 @@ public final class NavOsaXml2PdfServer {
             }
 
             ByteArrayOutputStream pdf = new ByteArrayOutputStream();
+            // Saxon streams its XSL-FO into FOP as it goes: the two run as one, so one span.
+            ISpan draw = transaction.startChild("render", "Saxon HE (XSLT) into Apache FOP (PDF)");
 
             try {
                 Fop fop = fopFactory.newFop(MimeConstants.MIME_PDF, pdf);
                 Xslt30Transformer transformer = template.load30();
                 transformer.setStylesheetParameters(Map.of(new QName("lang"), new XdmAtomicValue(lang)));
                 transformer.transform(invoiceData(xml), new SAXDestination(fop.getDefaultHandler()));
+                draw.setData("pdf_bytes", pdf.size());
+                draw.finish(SpanStatus.OK);
             } catch (SaxonApiException | SAXException exception) { // FOPException is a SAXException
+                draw.finish(SpanStatus.INVALID_ARGUMENT);
                 // The XML, or what the template made of it (FOP's validation too), not this server.
                 System.err.println("422 lang=" + lang + " (" + xml.length + " bytes): " + exception.getMessage());
                 report422(exception, lang, xml.length);
                 respond(exchange, 422, "text/plain", "Could not draw the invoice: " + exception.getMessage());
                 return;
+            } catch (RuntimeException exception) {
+                draw.finish(SpanStatus.INTERNAL_ERROR);
+                throw exception;
             }
 
             respond(exchange, 200, "application/pdf", pdf.toByteArray());
@@ -154,6 +194,15 @@ public final class NavOsaXml2PdfServer {
             Sentry.captureException(exception);
             respond(exchange, 500, "text/plain", "Could not draw the invoice: " + exception);
         }
+    }
+
+    /** A 4xx is the request's fault, a 5xx this server's; no status at all, the answer never sent. */
+    private static SpanStatus spanStatus(int status) {
+        if (status < 100) {
+            return SpanStatus.UNKNOWN_ERROR;
+        }
+
+        return SpanStatus.fromHttpStatusCode(status, status < 500 ? SpanStatus.INVALID_ARGUMENT : SpanStatus.INTERNAL_ERROR);
     }
 
     /**
