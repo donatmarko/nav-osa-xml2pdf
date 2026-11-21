@@ -1,12 +1,17 @@
 # The base images (pinned by digest in the Dockerfile) and the workflows' actions (pinned by
 # commit): a pull request a week where a newer one is out. Saxon HE and FOP are pinned by
-# checksum in the Dockerfile's ARGs, updated by hand.
+# checksum in the Dockerfile's ARGs, updated by hand. The base images stay on their Java LTS
+# (21): a newer major version is taken by hand, onto the next LTS, not onto every release.
 version: 2
 updates:
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: eclipse-temurin
+        update-types:
+          - version-update:semver-major
     commit-message:
       prefix: chore
   - package-ecosystem: github-actions

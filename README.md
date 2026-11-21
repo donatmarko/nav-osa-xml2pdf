@@ -35,7 +35,8 @@ docker run -d --restart unless-stopped -p 8080:80 ghcr.io/donatmarko/nav-osa-xml
 ```
 
 Out of memory (the heap is 512 MB), the JVM exits rather than going on half-broken: the restart
-policy brings it back.
+policy brings it back. The heap starts at 32 MB and gives back what a large invoice took: the
+container takes about 120 MB idle, and about 220 MB once it has drawn many invoices.
 
 With NAV's sample invoices downloaded (`scripts/fetch-nav-samples.sh`):
 

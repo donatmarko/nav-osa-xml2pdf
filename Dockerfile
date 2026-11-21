@@ -5,7 +5,7 @@
 # (src/NavOsaXml2PdfServer.java), on the internal network only. Built from the repository root:
 #   docker build .
 
-FROM eclipse-temurin:24-jdk-alpine@sha256:8fdbcb6bc6b846640cea7058e6eeb56c311fae4efaa506a213789134065c6b90 AS build
+FROM eclipse-temurin:21-jdk-alpine@sha256:c07bb82e004a166b5d3d63b84ad70e2e822f228505e2e0c0b8dfdc2890d22f13 AS build
 
 ARG SAXON_VERSION=12.10
 ARG SAXON_SHA256=b571af282f25d7301059f788b9a149aab8b5cdc14ef3d212dc5425d3dcbb9a97
@@ -42,7 +42,7 @@ RUN apk add --no-cache curl \
 COPY src/NavOsaXml2PdfServer.java /tmp/src/
 RUN javac --release 21 -cp "saxon/*:fop/*:sentry/*" -d classes /tmp/src/NavOsaXml2PdfServer.java
 
-FROM eclipse-temurin:24-jre-alpine@sha256:4044b6c87cb088885bcd0220f7dc7a8a4aab76577605fa471945d2e98270741f
+FROM eclipse-temurin:21-jre-alpine@sha256:5d7689f47d670aca766b9503a70bccc2d73b4eb9221ae8f714ae958313c4ce70
 
 # DejaVu Sans for the template's Tahoma (template/fop.xconf).
 RUN apk add --no-cache font-dejavu fontconfig \
@@ -78,7 +78,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 
 # Out of memory, the JVM first runs a small one (a heap of 32 MB) that reports it where SENTRY_DSN
 # is set, then exits; a restart policy brings it back.
-CMD ["java", "-Djava.awt.headless=true", "-Xmx512m", "-XX:+ExitOnOutOfMemoryError", \
+# The heap starts small and gives back what a large invoice took (Min/MaxHeapFreeRatio): left to
+# itself, the JVM sizes it by the host's memory and keeps it at its largest.
+CMD ["java", "-Djava.awt.headless=true", "-Xms32m", "-Xmx512m", "-XX:MinHeapFreeRatio=10", "-XX:MaxHeapFreeRatio=30", "-XX:+ExitOnOutOfMemoryError", \
     "-XX:OnOutOfMemoryError=java -Xmx32m -cp '/opt/nav-osa-xml2pdf/classes:/opt/nav-osa-xml2pdf/saxon/*:/opt/nav-osa-xml2pdf/fop/*:/opt/nav-osa-xml2pdf/sentry/*' NavOsaXml2PdfServer --report-oom", \
     "-Xss8m", "-cp", "/opt/nav-osa-xml2pdf/classes:/opt/nav-osa-xml2pdf/saxon/*:/opt/nav-osa-xml2pdf/fop/*:/opt/nav-osa-xml2pdf/sentry/*", "NavOsaXml2PdfServer"]
 
